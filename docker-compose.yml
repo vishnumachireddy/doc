@@ -1,0 +1,90 @@
+version: '3.8'
+
+services:
+  # 1. Primary Relational Database
+  db:
+    image: postgres:15-alpine
+    container_name: resumeiq_db
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: securepassword123
+      POSTGRES_DB: resumeiq
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d resumeiq"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # 2. Asynchronous Event Broker
+  redis:
+    image: redis:7-alpine
+    container_name: resumeiq_redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # 3. FastAPI API Gateway
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: resumeiq_backend
+    environment:
+      - DATABASE_URL=postgresql://postgres:securepassword123@db:5432/resumeiq
+      - REDIS_URL=redis://redis:6379/0
+      - UPLOAD_DIR=/workspace/uploads
+      - SECRET_KEY=super-secret-key-change-in-production-1234567890
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+    ports:
+      - "8000:8000"
+    volumes:
+      - uploads_volume:/workspace/uploads
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # 4. Asynchronous Task ML Worker Pool
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: resumeiq_worker
+    command: celery -A backend.app.worker.celery_app.celery_app worker --loglevel=info
+    environment:
+      - DATABASE_URL=postgresql://postgres:securepassword123@db:5432/resumeiq
+      - REDIS_URL=redis://redis:6379/0
+      - UPLOAD_DIR=/workspace/uploads
+      - SECRET_KEY=super-secret-key-change-in-production-1234567890
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+    volumes:
+      - uploads_volume:/workspace/uploads
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # 5. React Vite Frontend
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: resumeiq_frontend
+    ports:
+      - "5173:5173"
+    depends_on:
+      - backend
+
+volumes:
+  pgdata:
+  uploads_volume:
